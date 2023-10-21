@@ -1,0 +1,686 @@
+#include <SoftwareSerial.h>
+#include <ThreeWire.h>
+#include <RtcDS1302.h>
+#include <SD.h>
+#include <SPI.h>
+#include <Wire.h>
+#include "FS.h"
+#include "time.h"
+#include <WiFi.h>
+#include <WebServer.h>
+/* Create object named SIM900 of the class SoftwareSerial */
+SoftwareSerial SIM900(17, 16);
+#include <ArduinoJson.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebSrv.h>
+#include <Arduino_JSON.h>
+#define Time_To_Sleep 10           //10           //10800           //Time ESP32 will go to sleep (in seconds)
+#define S_To_uS_Factor 1000000ULL  //Conversion factor for micro seconds to seconds
+RTC_DATA_ATTR int bootCount = 0;
+//WEBserver
+/* Put your SSID & Password */
+const char *ssid = "LarsKraft";     // Enter SSID here
+const char *password = "12345678";  //Enter Password here
+
+/* Put IP Address details */
+// Create AsyncWebServer object on port 80
+AsyncWebServer server(80);
+
+// Create a WebSocket object
+AsyncWebSocket ws("/ws");
+
+
+
+//CONSTANTS
+
+const int INIT = 0;
+const int CHECKCOM = 1;
+const int CHECKSERIAL = 2;
+const int SETUPGPRS = 3;
+const int APN = 4;
+const int OPENGPRS = 5;
+const int QUERYGPRS = 6;
+const int HTTPINIT = 7;
+const int HTTPSSL = 8;
+const int HTTPPARA = 9;
+const int BUILDREQ = 10;
+const int SETURL = 11;
+const int SETCONTENT = 12;
+const int INITPOST = 13;
+const int SENDREQ = 14;
+const int READRES = 15;
+const int HTTPTERM = 16;
+const int CLOSEGPRS = 17;
+const int ERROR = -1;
+const int LOGGTOSD = 18;
+const int SLEEP = 69;
+const int NPT = 22;
+const int GETTIME = 23;
+const int ENTERSLEEP = 24;
+const int EXITSLEEP = 25;
+const int RESTARTSIM = 26;
+
+// Timer variables
+unsigned long lastTime = 0;
+unsigned long timerDelay = 10000;
+
+int I2Cdata[2];
+
+//PINS
+int analogPin = 0;
+const int ledPin = 25;
+const int wifiPin = 26;
+
+bool wifiAPActive = 0;
+
+#define SDA 21
+#define SCL 22
+
+//RTC
+//ThreeWire myWire(26,27,2); // IO, SCLK, CE
+//RtcDS1302<ThreeWire> rtc(myWire);
+
+
+//variables
+int val = 0;
+String testing = "";
+float pressure = 0;
+float temp = 0;
+float voltage = 0;
+int state = 0;
+String serialReadings;
+char t[32];
+const String url = "vasskraft-8d6df-default-rtdb.europe-west1.firebasedatabase.app/test.json";
+//String sendtoserver;
+//StaticJsonDocument<200> doc;
+JSONVar readings;
+// Initialize WiFi
+void initWiFi() {
+  // Connect to Wi-Fi network with SSID and password
+  Serial.print("Setting AP (Access Point)…");
+  // Remove the password parameter, if you want the AP (Access Point) to be open
+  WiFi.softAP(ssid, password);
+
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+  wifiAPActive = true;
+}
+
+// Initialize WiFi
+void stopWiFi() {
+  WiFi.softAPdisconnect(true);
+  wifiAPActive = false;
+  Serial.println("WiFi AP is deactivated.");
+}
+
+void notifyClients(String sensorReadings) {
+  ws.textAll(sensorReadings);
+}
+
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
+  AwsFrameInfo *info = (AwsFrameInfo *)arg;
+  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    //data[len] = 0;
+    //String message = (char*)data;
+    // Check if the message is "getReadings"
+    //if (strcmp((char*)data, "getReadings") == 0) {
+    //if it is, send current sensor readings
+    String sensorReadings = getSensorReadings();
+    Serial.print(sensorReadings);
+    notifyClients(sensorReadings);
+    //}
+  }
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  switch (type) {
+    case WS_EVT_CONNECT:
+      Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+      break;
+    case WS_EVT_DISCONNECT:
+      Serial.printf("WebSocket client #%u disconnected\n", client->id());
+      break;
+    case WS_EVT_DATA:
+      handleWebSocketMessage(arg, data, len);
+      break;
+    case WS_EVT_PONG:
+    case WS_EVT_ERROR:
+      break;
+  }
+}
+
+void initWebSocket() {
+  ws.onEvent(onEvent);
+  server.addHandler(&ws);
+}
+
+
+void checkSD() {
+  if (!SD.begin()) {
+    Serial.println("Card Mount Failed");
+    return;
+  }
+  uint8_t cardType = SD.cardType();
+
+  if (cardType == CARD_NONE) {
+    Serial.println("No SD card attached");
+    return;
+  }
+  
+
+  Serial.print("SD Card Type: ");
+  if (cardType == CARD_MMC) {
+    Serial.println("MMC");
+  } else if (cardType == CARD_SD) {
+    Serial.println("SDSC");
+  } else if (cardType == CARD_SDHC) {
+    Serial.println("SDHC");
+  } else {
+    Serial.println("UNKNOWN");
+  }
+
+  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD Card Size: %lluMB\n", cardSize);
+}
+
+String getSensorReadings() {
+ static float *sensorData = readI2c(8, 12);
+  Serial.println(sensorData[0]);
+  Serial.println(sensorData[1]);
+  Serial.println(sensorData[2]);
+  readings["readings"] = serialReadings;
+  readings["state"] = state;
+  readings["pressure"] = sensorData[0];
+  readings["temperature"] = sensorData[1];
+  readings["voltage"] = sensorData[2];
+  String jsonString = JSON.stringify(readings);
+  //Serial.println(jsonString);
+  return jsonString;
+}
+
+void initAP() {
+  initWiFi();
+  initWebSocket();
+
+  // Web Server Root URL
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(SD, "/index.html", "text/html");
+  });
+
+  server.serveStatic("/", SD, "/");
+
+  // Start serverg
+  server.begin();
+}
+
+void setTime(int yr, int month, int mday, int hr, int minute, int sec, int isDst) {
+  struct tm tm;
+
+  tm.tm_year = yr - 1900;  // Set date
+  tm.tm_mon = month - 1;
+  tm.tm_mday = mday;
+  tm.tm_hour = hr;  // Set time
+  tm.tm_min = minute;
+  tm.tm_sec = sec;
+  tm.tm_isdst = isDst;  // 1 or 0
+  time_t t = mktime(&tm);
+  Serial.printf("Setting time: %s", asctime(&tm));
+  struct timeval now = { .tv_sec = t };
+  settimeofday(&now, NULL);
+}
+
+void setup() {
+  ++bootCount;
+  Serial.println("Boot number: " + String(bootCount));
+  Wire.begin(SDA, SCL);
+  pinMode(ledPin, OUTPUT);
+  pinMode(wifiPin, INPUT);
+  digitalWrite(ledPin, HIGH);
+  SIM900.begin(9600);   /* Define baud rate for software serial communication */
+  Serial.begin(115200); /* Define baud rate for serial communication */
+  //restartSIM900();
+  checkSD();
+
+
+  Serial.print("Initializing SD card...");
+
+  if (!SD.begin(4)) {
+    Serial.println("initialization failed!");
+    while (1)
+      ;
+  }
+
+  //rtc.Begin();
+
+  //RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
+  //printDateTime(compiled);
+  //Serial.println();
+
+
+  //configTime(0, 0, ntpServer);
+
+  //checkLocalTime();
+
+  delay(20000);
+  readSerialData();
+  delay(2000);
+
+  esp_sleep_enable_timer_wakeup(Time_To_Sleep * S_To_uS_Factor);
+  Serial.println("Setup ESP32 to sleep for every " + String(Time_To_Sleep) + " Seconds");
+
+  //Go to sleep now
+
+
+  //Serial.println("This will not print!!"); // This will not get print,as ESP32 goes in Sleep mode.
+}
+
+void loop() {
+  Serial.println(state);
+  if ((millis() - lastTime) > timerDelay && wifiAPActive) {
+    Serial.println("Reading loop");
+    static float * sensorReadings = readI2c(8,12);
+    Serial.println(sensorReadings[0]);
+    Serial.println(sensorReadings[1]);
+    Serial.println(sensorReadings[2]);
+    //Serial.print(sensorReadings);
+    //notifyClients(sensorReadings);
+
+    lastTime = millis();
+  }
+
+  int buttonState = digitalRead(wifiPin);
+
+  if (buttonState == HIGH) {  // Button is pressed
+    if (!wifiAPActive) {
+      initAP();
+    }
+  } else {  // Button is not pressed
+    if (wifiAPActive) {
+      stopWiFi();
+    }
+  }
+
+
+
+
+  ws.cleanupClients();
+  // val = analogRead(analogPin);
+  // pressure = val * (5.0 / 1023.0);
+
+  switch (state) {
+    case INIT:
+      {
+        delay(3000);
+        state = CHECKSERIAL;
+        break;
+      }
+
+    case CHECKSERIAL:
+      state = CHECKCOM;
+
+      delay(3000);
+      break;
+
+    case CHECKCOM:
+      Serial.println("AT");
+      SIM900.println("AT");
+      delay(3000);
+      readSerialData();
+      state = EXITSLEEP;
+      break;
+
+    case NPT:
+      {
+        if (checkLocalTime()) {
+          state = SETUPGPRS;
+        } else {
+
+
+
+          SIM900.println("AT+CLTS=1");
+          delay(3000);
+          readSerialData();
+          state = GETTIME;
+        }
+        break;
+      }
+
+    case GETTIME:
+      {
+        SIM900.println("AT+CCLK?");
+        delay(3000);
+        String data = readSerialData();
+        if (data.isEmpty()) {
+          state = RESTARTSIM;
+        } else {
+          parseGSMDate(data);
+          state = SETUPGPRS;
+        }
+
+        break;
+      }
+
+    case ENTERSLEEP:
+      if (wifiAPActive) {
+        state = INIT;
+      } else {
+
+
+        SIM900.println("AT+CSCLK=2");
+        delay(3000);
+        readSerialData();
+        state = SLEEP;
+      }
+      break;
+
+
+    case EXITSLEEP:
+      SIM900.println("DUMMYCOMMAND");
+      SIM900.println("AT+CSCLK=0");
+      delay(3000);
+      readSerialData();
+      state = NPT;
+      break;
+
+    case RESTARTSIM:
+      Serial.println("ERROR OCCURED RESTARTING SIM");
+      restartSIM900();
+      delay(8000);
+      readSerialData();
+      state = INIT;
+      break;
+
+    case SETUPGPRS:
+      SIM900.println("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"");
+      delay(6000);
+      readSerialData();
+      state = APN;
+      break;
+
+    case APN:
+      {
+        SIM900.println("AT+SAPBR=3,1,\"APN\",\"telenor.smart\""); /* APN of the provider */
+        delay(6000);
+        String data = readSerialData();
+        if (containsError(data)) {
+          state = RESTARTSIM;
+        } else {
+          state = OPENGPRS;
+        }
+
+        break;
+      }
+    case OPENGPRS:
+      {
+        SIM900.println("AT+SAPBR=1,1"); /* Open GPRS context */
+        delay(6000);
+        String data = readSerialData();
+        if (containsError(data)) {
+          state = RESTARTSIM;
+        } else {
+          state = QUERYGPRS;
+        }
+
+        break;
+      }
+
+    case QUERYGPRS:
+
+      SIM900.println("AT+SAPBR=2,1"); /* Query the GPRS context */
+      delay(6000);
+      readSerialData();
+      state = HTTPINIT;
+      break;
+
+
+    case HTTPINIT:
+      SIM900.println("AT+HTTPINIT"); /* Initialize HTTP service */
+      delay(6000);
+      readSerialData();
+      state = HTTPSSL;
+      break;
+
+    case HTTPSSL:
+      SIM900.println("AT+HTTPSSL=1"); /* Initialize HTTP service */
+      delay(6000);
+      readSerialData();
+      state = HTTPPARA;
+      break;
+
+    case HTTPPARA:
+      SIM900.println("AT+HTTPPARA=\"CID\",1"); /* Set parameters for HTTP session */
+      delay(6000);
+      readSerialData();
+      state = SETURL;
+      break;
+
+    case BUILDREQ:
+      {
+
+        StaticJsonDocument<200> doc;
+        String sendtoserver;
+        doc["sensor"] = "preassure";
+        doc["time"] = getTime();
+        serializeJson(doc, Serial);
+        Serial.println(" ");
+        serializeJson(doc, sendtoserver);
+        state = SETURL;
+        break;
+      }
+
+    case SETURL:
+      SIM900.println("AT+HTTPPARA=\"URL\",\"vasskraft-8d6df-default-rtdb.europe-west1.firebasedatabase.app/test.json\""); /* Set parameters for HTTP session */
+      delay(6000);
+      readSerialData();
+      state = SETCONTENT;
+      break;
+
+    case SETCONTENT:
+      SIM900.println("AT+HTTPPARA=\"CONTENT\",\"application/json\"");
+      delay(6000);
+      readSerialData();
+      state = INITPOST;
+      break;
+
+    case INITPOST:
+      {
+
+        
+       static float *sensorData = readI2c(8, 12);
+        static float sdData = sensorData[0];
+        appendFile(SD, "/datalogger.csv", sdData);
+        StaticJsonDocument<200> doc;
+        String sendtoserver;
+        doc["sensor"] = sensorData[0];
+        doc["time"] = getTime();
+        doc["temperature"] = sensorData[1];
+        doc["voltage"] = sensorData[2];
+        serializeJson(doc, Serial);
+        Serial.println(" ");
+        serializeJson(doc, sendtoserver);
+        delay(4000);
+        SIM900.println("AT+HTTPDATA=" + String(sendtoserver.length()) + ",100000");
+        Serial.println(sendtoserver);
+        delay(6000);
+        readSerialData();
+        Serial.flush();
+        SIM900.println(sendtoserver);
+        delay(6000);
+        readSerialData();
+        state = SENDREQ;
+        break;
+      }
+
+    case SENDREQ:
+      SIM900.println("AT+HTTPACTION=1"); /* Start POST session */
+      delay(10000);
+      readSerialData();
+      state = READRES;
+      break;
+
+    case READRES:
+      SIM900.println("AT+HTTPREAD"); /* Read data from HTTP server */
+      delay(8000);
+      readSerialData();
+      state = HTTPTERM;
+      break;
+
+    case HTTPTERM:
+      {
+        SIM900.println("AT+HTTPTERM"); /* Terminate HTTP service */
+        delay(10000);
+        String data = readSerialData();
+        if (containsError(data)) {
+          state = RESTARTSIM;
+        } else {
+          state = CLOSEGPRS;
+        }
+
+        break;
+      }
+
+    case CLOSEGPRS:
+      {
+        SIM900.println("AT+SAPBR=0,1"); /* Close GPRS context */
+        delay(5000);
+
+        String data = readSerialData();
+        if (containsError(data)) {
+          state = RESTARTSIM;
+        } else {
+          state = ENTERSLEEP;
+        }
+        break;
+      }
+
+    case SLEEP:
+      Serial.println("SLEEP");
+      esp_deep_sleep_start();
+      break;
+
+    case LOGGTOSD:
+      break;
+
+    case 55:
+      readI2c(8, 12);
+      break;
+  }
+}
+
+void ShowSerialData() {
+  while (SIM900.available() != 0)      /* If data is available on serial port */
+    Serial.write(char(SIM900.read())); /* Print character received on to the serial monitor */
+}
+void restartSIM900() {
+  Serial.println("RESTARTING SIM00)");
+  digitalWrite(ledPin, LOW);
+  delay(500);
+  digitalWrite(ledPin, HIGH);
+  delay(3000);
+  readSerialData();
+  state = INIT;
+}
+float *readI2c(int slave, int bytes) {
+  Serial.println("reading I2C");
+  float receivedData[3] = {0.0,0.0,0.0};
+  Wire.requestFrom(8, 12);  // request 6 bytes from slave device #8
+  //delay(3000);
+  Serial.println("WIRE");
+  Serial.println(Wire.available());
+  while (Wire.available()>0) {  // slave may send less than requested
+    byte *byteData = (byte *)receivedData;
+    for (int i = 0; i < sizeof(receivedData); i++) {
+      byteData[i] = Wire.read();
+    }
+  }
+
+  static float sensors[] = { receivedData[0], receivedData[1], receivedData[2] };
+  return sensors;
+}
+
+void appendFile(fs::FS &fs, const char *path, const float value) {
+  Serial.printf("Appending to file: %s\n", path);
+
+  File file = fs.open(path, FILE_APPEND);
+  if (!file) {
+    Serial.println("Failed to open file for appending");
+    return;
+  }
+  if (file.println(value)) {
+    Serial.println("Message appended");
+  } else {
+    Serial.println("Append failed");
+  }
+  file.close();
+}
+
+void listDir(fs::FS &fs, const char *dirname, uint8_t levels) {
+  Serial.printf("Listing directory: %s\n", dirname);
+
+  File root = fs.open(dirname);
+  if (!root) {
+    Serial.println("Failed to open directory");
+    return;
+  }
+  if (!root.isDirectory()) {
+    Serial.println("Not a directory");
+    return;
+  }
+}
+
+String parseGSMDate(String inputString) {
+  int day, month, year, hour, minute, second, timezone;
+  String test;
+  int dateStart = inputString.indexOf("\"") + 1;       // Find the first double quote
+  int dateEnd = inputString.indexOf("\"", dateStart);  // Find the second double quote
+  test = inputString.substring(dateStart, dateEnd);    // Extract the date string
+  Serial.println("Date: " + test);
+
+  // Extract individual components
+  sscanf(test.c_str(), "%d/%d/%d,%d:%d:%d%*d%*d", &year, &month, &day, &hour, &minute, &second);
+  Serial.println(year);
+  Serial.println(year + 2000);
+  Serial.println(month);
+  setTime(year + 2000, month, day, hour, minute, second, 0);
+  //getTime();
+  return test;
+}
+
+String readSerialData() {
+  String data;
+  while (SIM900.available() != 0) /* If data is available on serial port */
+    data = SIM900.readString();
+  delay(1000);
+  data.trim();
+  Serial.println(data);
+  serialReadings = data;
+  return data;
+}
+
+bool checkLocalTime() {
+  struct tm timeinfo;
+  bool check = false;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+    check = false;
+  } else {
+    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+    check = true;
+  }
+
+  return check;
+}
+bool containsError(String input) {
+  return input.indexOf("ERROR") != -1;
+}
+unsigned long getTime() {
+  time_t now;
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    //Serial.println("Failed to obtain time");
+    return (0);
+  }
+  time(&now);
+  return now;
+}
