@@ -15,8 +15,8 @@ SoftwareSerial SIM900(17, 16);
 #include <AsyncTCP.h>
 #include <ESPAsyncWebSrv.h>
 #include <Arduino_JSON.h>
-unsigned int Time_To_Sleep = 3600;  //10           //10800           //Time ESP32 will go to sleep (in seconds)
-#define S_To_uS_Factor 1000000ULL   //Conversion factor for micro seconds to seconds
+unsigned int Time_To_Sleep = 3600;     //10           //10800           //Time ESP32 will go to sleep (in seconds)
+#define S_To_uS_Factor 1000000ULL  //Conversion factor for micro seconds to seconds
 RTC_DATA_ATTR int bootCount = 0;
 //WEBserver
 /* Put your SSID & Password */
@@ -69,7 +69,6 @@ int I2Cdata[2];
 
 //PINS
 int analogPin = 0;
-const int wakeuppin = 14;
 const int ledPin = 25;
 const int wifiPin = 26;
 
@@ -263,43 +262,41 @@ void setup() {
 
 
 
-  Wire.begin(SDA, SCL);
-  pinMode(wakeuppin, OUTPUT);
-  pinMode(ledPin, OUTPUT);
-  pinMode(wifiPin, INPUT);
-  digitalWrite(ledPin, HIGH);
-  digitalWrite(wakeuppin, HIGH);
-  checkSD();
+Wire.begin(SDA, SCL);
+pinMode(ledPin, OUTPUT);
+pinMode(wifiPin, INPUT);
+digitalWrite(ledPin, HIGH);
+checkSD();
 
-  Serial.println("Boot number: " + String(bootCount));
-  Serial.print("Initializing SD card...");
+Serial.println("Boot number: " + String(bootCount));
+Serial.print("Initializing SD card...");
 
-  if (!SD.begin(4)) {
-    Serial.println("initialization failed!");
-  }
+if (!SD.begin(4)) {
+  Serial.println("initialization failed!");
+}
 
-  //rtc.Begin();
+//rtc.Begin();
 
-  //RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
-  //printDateTime(compiled);
-  //Serial.println();
+//RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
+//printDateTime(compiled);
+//Serial.println();
 
 
-  //configTime(0, 0, ntpServer);
+//configTime(0, 0, ntpServer);
 
-  //checkLocalTime();
+//checkLocalTime();
 
-  delay(20000);
-  readSerialData();
-  delay(2000);
+delay(20000);
+readSerialData();
+delay(2000);
 
-  esp_sleep_enable_timer_wakeup(Time_To_Sleep * S_To_uS_Factor);
-  Serial.println("Setup ESP32 to sleep for every " + String(Time_To_Sleep) + " Seconds");
+esp_sleep_enable_timer_wakeup(Time_To_Sleep *S_To_uS_Factor);
+Serial.println("Setup ESP32 to sleep for every " + String(Time_To_Sleep) + " Seconds");
 
-  //Go to sleep now
+//Go to sleep now
 
 
-  //Serial.println("This will not print!!"); // This will not get print,as ESP32 goes in Sleep mode.
+//Serial.println("This will not print!!"); // This will not get print,as ESP32 goes in Sleep mode.
 }
 
 void loop() {
@@ -308,7 +305,6 @@ void loop() {
     Serial.println("Reading loop");
     //static float * sensorReadings = readI2c(8,12);
     //Serial.print(sensorReadings);
-     readI2c(8, 12);
     String sensorReadings = getSensorReadings();
     notifyClients(sensorReadings);
 
@@ -402,7 +398,6 @@ void loop() {
 
 
     case EXITSLEEP:
-      digitalWrite(wakeuppin, HIGH);
       SIM900.println("DUMMYCOMMAND");
       SIM900.println("AT+CSCLK=0");
       delay(3000);
@@ -497,7 +492,7 @@ void loop() {
       }
 
     case SETURL:
-      SIM900.println("AT+HTTPPARA=\"URL\",\"vasskraft-8d6df-default-rtdb.europe-west1.firebasedatabase.app/data.json\""); /* Set parameters for HTTP session */
+      SIM900.println("AT+HTTPPARA=\"URL\",\"vasskraft-8d6df-default-rtdb.europe-west1.firebasedatabase.app/test.json\""); /* Set parameters for HTTP session */
       delay(6000);
       readSerialData();
       state = SETCONTENT;
@@ -547,26 +542,23 @@ void loop() {
       break;
 
     case READRES:
+      SIM900.println("AT+HTTPREAD"); /* Read data from HTTP server */
+      delay(8000);
+      readSerialData();
+      state = HTTPTERM;
+      break;
+
+    case HTTPTERM:
       {
-        SIM900.println("AT+HTTPREAD"); /* Read data from HTTP server */
+        SIM900.println("AT+HTTPTERM"); /* Terminate HTTP service */
         delay(10000);
         String data = readSerialData();
         if (containsError(data)) {
           state = RESTARTSIM;
         } else {
-          state = HTTPTERM;
+          state = CLOSEGPRS;
         }
 
-        break;
-      }
-
-    case HTTPTERM:
-      {
-        SIM900.println("AT+HTTPTERM"); /* Terminate HTTP service */
-        readSerialData();
-        delay(10000);
-
-        state = CLOSEGPRS;
         break;
       }
 
@@ -586,7 +578,6 @@ void loop() {
 
     case SLEEP:
       Serial.println("SLEEP");
-      digitalWrite(wakeuppin, LOW);
       esp_deep_sleep_start();
       break;
 
@@ -617,7 +608,7 @@ String getSensorReadings() {
   readings["readings"] = serialReadings;
   readings["state"] = state;
   readings["pressure"] = pressure;
-  readings["raw"] = temp;
+  readings["temperature"] = temp;
   readings["voltage"] = voltage;
   readings["sleep"] = Time_To_Sleep;
   String jsonString = JSON.stringify(readings);
@@ -628,7 +619,6 @@ String getSensorReadings() {
 float *readI2c(int slave, int bytes) {
   //static float sensors[] = { 0.0, 0.0, 0.0 };
   Serial.println("reading I2C");
-  serialReadings = "reading I2C";
   float receivedData[3] = { 0.0, 0.0, 0.0 };
   //Wire.requestFrom(8, 12);  // request 6 bytes from slave device #8
   //delay(3000);
@@ -644,17 +634,20 @@ float *readI2c(int slave, int bytes) {
       }
       break;
     }
+
     attempts++;
-    delay(1000);  // Adjust the delay as needed between attempts
+    delay(100);  // Adjust the delay as needed between attempts
   }
   if (attempts == maxAttempts) {
     Serial.println("No response from the slave after multiple attempts.");
-    serialReadings = "reading failed";
+    // Handle the case when there's no response from the slave
   } else {
     // Process received data here
     pressure = receivedData[0];
     temp = receivedData[1];
     voltage = receivedData[2];
+
+    
   }
   // while (Wire.available() > 0) {  // slave may send less than requested
   //   byte *byteData = (byte *)receivedData;
@@ -662,7 +655,7 @@ float *readI2c(int slave, int bytes) {
   //     byteData[i] = Wire.read();
   //   }
   // }
-  static float sensors[] = { receivedData[0], receivedData[1], receivedData[2] };
+static float sensors[] = { receivedData[0], receivedData[1], receivedData[2] };
   return sensors;
 }
 

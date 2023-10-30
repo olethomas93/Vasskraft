@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>LARSKRAFT IOT DASHBOARD</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="icon" type="image/png" href="favicon.png">
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <div class="topnav">
+            <h1>LARSKRAFT IOT DASHBOARD</h1>
+        </div>
+        <div class="content">
+            <div class="card-grid">
+                <div class="card">
+                    <p class="card-title"><i class="fas fa-thermometer-threequarters" style="color:#059e8a;"></i> Serial Readings</p>
+                    <p class="reading"><span id="readings"></span></p>
+                </div>
+                <div class="card">
+                    <p class="card-title">State</p>
+                    <p class="reading"><span id="state"></span></p>
+                </div>
+                <div class="card">
+                    <p class="card-title"> Pressure</p>
+                    <p class="reading"><span id="pressure"></span>bar</p>
+                </div>
+
+                <div class="card">
+                    <p class="card-title"> Temperature</p>
+                    <p class="reading"><span id="temperature"></span>°C</p>
+                </div>
+
+                <div class="card">
+                    <p class="card-title"> Voltage</p>
+                    <p class="reading"><span id="voltage"></span>V</p>
+                </div>
+                <div class="card">
+                    <p class="card-title"> sleeptime</p>
+                    <p class="reading"><span id="sleep"></span></p>
+                </div>
+
+                <div class="card">
+                    <p class="card-title"> Sleep</p>
+                    <button  id="1min" >1min</button>
+                    <button id="1hour" >1h</button>
+                    <button id="6hour" >6h</button>
+                    <button id="12hour" >12h</button>
+                    <button id="24hour">24h</button>
+
+                </div>
+            </div>
+            <div>
+
+            </div>
+        </div>
+        <script src="script.js"></script>
+    </body>
+</html>
